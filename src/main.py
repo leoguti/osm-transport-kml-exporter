@@ -90,7 +90,9 @@ def main():
         
         # Generar nombre del archivo ZIP
         input_filename = Path(input_file).stem
-        output_dir = "output"
+        # Usar ruta absoluta a la carpeta output en la raíz del proyecto
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        output_dir = os.path.join(project_root, "output")
         os.makedirs(output_dir, exist_ok=True)
         output_zip = os.path.join(output_dir, f"{input_filename}_kml.zip")
         

@@ -1,4 +1,4 @@
-"""Validador de archivos OSM para transporte público."
+"""Validador de archivos OSM para transporte público."""
 
 import os
 import xml.etree.ElementTree as ET

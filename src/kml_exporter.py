@@ -27,8 +27,7 @@ def sanitize_filename(name: str) -> str:
     # Reemplazar espacios
     name = name.replace(' ', '_')
     # Eliminar caracteres no ASCII
-    name = re.sub(r'[^
-\x00-\x7F]+', '_', name)
+    name = re.sub(r'[^\x00-\x7F]+', '_', name)
     # Limitar longitud
     if len(name) > 200:
         name = name[:200]
