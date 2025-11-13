@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Script principal para exportar rutas de transporte público OSM a KML."""
+"""Script principal para exportar rutas de transporte público OSM a KML y Shapefile."""
 
 import sys
 import os
 import logging
 import tempfile
 import shutil
+import argparse
 from pathlib import Path
 
 from validator import validate_osm_file
 from osm_processor import process_osm_file
 from kml_exporter import export_routes_to_kml, create_zip
+from shp_exporter import export_routes_to_shapefile, create_shapefile_zip
 
 # Configurar logging
 logging.basicConfig(
@@ -21,28 +23,90 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+def parse_arguments():
+    """
+    Parsea los argumentos de línea de comandos.
+    """
+    parser = argparse.ArgumentParser(
+        description="Exportador de rutas de transporte público OSM a KML y Shapefile",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Ejemplos:
+  %(prog)s input/ciudad.osm                    # Solo KML (por defecto)
+  %(prog)s input/ciudad.osm --format shp      # Solo Shapefile  
+  %(prog)s input/ciudad.osm --format both     # KML y Shapefile
+  %(prog)s input/ciudad.osm --kml --shp       # KML y Shapefile (alternativo)"""
+    )
+    
+    parser.add_argument(
+        "input_file",
+        help="Archivo OSM de entrada"
+    )
+    
+    parser.add_argument(
+        "--format", 
+        choices=["kml", "shp", "shapefile", "both"],
+        default="kml",
+        help="Formato de salida (default: kml)"
+    )
+    
+    parser.add_argument(
+        "--kml",
+        action="store_true",
+        help="Exportar a formato KML"
+    )
+    
+    parser.add_argument(
+        "--shp",
+        action="store_true", 
+        help="Exportar a formato Shapefile"
+    )
+    
+    return parser.parse_args()
+
+def determine_export_formats(args):
+    """
+    Determina qué formatos exportar basado en los argumentos.
+    """
+    export_kml = False
+    export_shp = False
+    
+    if args.kml or args.shp:
+        export_kml = args.kml
+        export_shp = args.shp
+    else:
+        if args.format in ["kml"]:
+            export_kml = True
+        elif args.format in ["shp", "shapefile"]:
+            export_shp = True
+        elif args.format == "both":
+            export_kml = True
+            export_shp = True
+    
+    # Si no se especificó nada, usar KML por defecto
+    if not export_kml and not export_shp:
+        export_kml = True
+    
+    return export_kml, export_shp
+
 def main():
     """
-    Función principal del exportador OSM a KML.
+    Función principal del exportador OSM a KML y Shapefile.
     """
+    args = parse_arguments()
+    export_kml, export_shp = determine_export_formats(args)
+    
+    formats = []
+    if export_kml:
+        formats.append("KML")
+    if export_shp:
+        formats.append("Shapefile")
+    
     print("="*60)
-    print("🚌 OSM Transport KML Exporter")
+    print(f"🚌 OSM Transport Exporter - {' + '.join(formats)}")
     print("="*60)
     print()
     
-    # Verificar argumentos
-    if len(sys.argv) < 2:
-        print("❌ Error: Debes proporcionar un archivo OSM como argumento")
-        print()
-        print("📚 Uso:")
-        print(f"  python {sys.argv[0]} <archivo.osm>")
-        print()
-        print("📝 Ejemplo:")
-        print(f"  python {sys.argv[0]} input/mi_ciudad.osm")
-        print()
-        sys.exit(1)
-    
-    input_file = sys.argv[1]
+    input_file = args.input_file
     
     # Paso 1: Validar archivo OSM
     print(f"🔍 Validando archivo: {input_file}")
@@ -71,65 +135,107 @@ def main():
     print(f"✅ Se encontraron {len(routes)} rutas válidas")
     print()
     
-    # Paso 3: Exportar a KML en directorio temporal
-    print("🗂️  Generando archivos KML...")
-    temp_dir = tempfile.mkdtemp(prefix="osm_kml_")
+    # Obtener geometrías de ways para ambos exportadores
+    from osm_processor import get_way_geometries
+    way_geoms = get_way_geometries(input_file)
     
-    try:
-        kml_files = export_routes_to_kml(routes, temp_dir)
+    # Configurar directorios de salida
+    input_filename = Path(input_file).stem
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    output_dir = os.path.join(project_root, "output")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    generated_files = []
+    
+    # Paso 3: Exportar a KML si se solicita
+    if export_kml:
+        print("🗂️  Generando archivos KML...")
+        temp_dir = tempfile.mkdtemp(prefix="osm_kml_")
         
-        if not kml_files:
-            print("⚠️  No se pudieron generar archivos KML")
-            sys.exit(1)
+        try:
+            kml_files = export_routes_to_kml(routes, temp_dir)
+            
+            if not kml_files:
+                print("⚠️  No se pudieron generar archivos KML")
+            else:
+                print(f"✅ Se generaron {len(kml_files)} archivos KML")
+                
+                # Crear archivo ZIP para KML
+                print("📦 Creando archivo ZIP para KML...")
+                output_zip_kml = os.path.join(output_dir, f"{input_filename}_kml.zip")
+                zip_path_kml = create_zip(kml_files, output_zip_kml)
+                generated_files.append(("KML", zip_path_kml))
+                print("✅ Archivo ZIP KML creado exitosamente")
+                
+        except Exception as e:
+            print(f"❌ Error durante la exportación KML: {str(e)}")
+            logger.exception("Error durante la exportación KML")
         
-        print(f"✅ Se generaron {len(kml_files)} archivos KML")
+        finally:
+            # Limpiar directorio temporal KML
+            try:
+                shutil.rmtree(temp_dir)
+                logger.debug(f"Directorio temporal KML eliminado: {temp_dir}")
+            except Exception as e:
+                logger.warning(f"No se pudo eliminar directorio temporal KML: {e}")
+        
         print()
+    
+    # Paso 4: Exportar a Shapefile si se solicita
+    if export_shp:
+        print("🗂️  Generando Shapefile...")
+        temp_shp_dir = tempfile.mkdtemp(prefix="osm_shp_")
         
-        # Paso 4: Crear archivo ZIP
-        print("📦 Creando archivo ZIP...")
+        try:
+            shp_path = export_routes_to_shapefile(routes, way_geoms, temp_shp_dir)
+            print(f"✅ Shapefile generado: {len(routes)} rutas")
+            
+            # Crear archivo ZIP para Shapefile
+            print("📦 Creando archivo ZIP para Shapefile...")
+            output_zip_shp = os.path.join(output_dir, f"{input_filename}_shp.zip")
+            zip_path_shp = create_shapefile_zip(shp_path, output_zip_shp)
+            generated_files.append(("Shapefile", zip_path_shp))
+            print("✅ Archivo ZIP Shapefile creado exitosamente")
+            
+        except Exception as e:
+            print(f"❌ Error durante la exportación Shapefile: {str(e)}")
+            logger.exception("Error durante la exportación Shapefile")
         
-        # Generar nombre del archivo ZIP
-        input_filename = Path(input_file).stem
-        # Usar ruta absoluta a la carpeta output en la raíz del proyecto
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        output_dir = os.path.join(project_root, "output")
-        os.makedirs(output_dir, exist_ok=True)
-        output_zip = os.path.join(output_dir, f"{input_filename}_kml.zip")
+        finally:
+            # Limpiar directorio temporal Shapefile
+            try:
+                shutil.rmtree(temp_shp_dir)
+                logger.debug(f"Directorio temporal Shapefile eliminado: {temp_shp_dir}")
+            except Exception as e:
+                logger.warning(f"No se pudo eliminar directorio temporal Shapefile: {e}")
         
-        zip_path = create_zip(kml_files, output_zip)
-        
-        # Obtener tamaño del archivo
-        zip_size = os.path.getsize(zip_path)
-        zip_size_mb = zip_size / (1024 * 1024)
-        
-        print("✅ Archivo ZIP creado exitosamente")
         print()
+    
+    # Resumen final
+    if generated_files:
         print("="*60)
         print("🎉 EXPORTACIÓN COMPLETADA")
         print("="*60)
-        print(f"📄 Archivo generado: {zip_path}")
-        print(f"📊 Tamaño: {zip_size_mb:.2f} MB")
+        
+        for format_type, file_path in generated_files:
+            file_size = os.path.getsize(file_path) / (1024 * 1024)
+            print(f"📄 {format_type}: {file_path}")
+            print(f"📊 Tamaño: {file_size:.2f} MB")
+            print()
+        
         print(f"🗺️  Rutas exportadas: {len(routes)}")
-        print(f"🗂️  Archivos KML: {len(kml_files)}")
         print()
         print("📌 Próximos pasos:")
-        print(f"  1. Descomprime el archivo: {zip_path}")
-        print("  2. Abre los archivos .kml en Google Earth o tu visor favorito")
-        print("  3. Verifica las rutas de transporte público")
-        print()
         
-    except Exception as e:
-        print(f"❌ Error durante la exportación: {str(e)}")
-        logger.exception("Error durante la exportación")
+        if export_kml:
+            print("  KML: Descomprime el ZIP y abre los .kml en Google Earth")
+        if export_shp:
+            print("  Shapefile: Descomprime el ZIP y abre en QGIS/ArcGIS")
+        
+        print()
+    else:
+        print("❌ No se pudo generar ningún archivo de salida")
         sys.exit(1)
-    
-    finally:
-        # Limpiar directorio temporal
-        try:
-            shutil.rmtree(temp_dir)
-            logger.debug(f"Directorio temporal eliminado: {temp_dir}")
-        except Exception as e:
-            logger.warning(f"No se pudo eliminar directorio temporal: {e}")
 
 if __name__ == "__main__":
     main()

@@ -136,3 +136,48 @@ def process_osm_file(input_path: str) -> Dict[int, Dict]:
     logger.info(f"Se procesaron {len(routes_with_geometry)} rutas con geometría válida")
     
     return routes_with_geometry
+
+
+def get_way_geometries(input_file: str) -> Dict[int, LineString]:
+    """
+    Extrae geometrías de ways desde un archivo OSM para uso en exportadores.
+    
+    Args:
+        input_file: Ruta al archivo OSM
+        
+    Returns:
+        Diccionario {way_id: LineString} con las geometrías de ways
+    """
+    logger.info(f"Extrayendo geometrías de ways desde: {input_file}")
+    
+    # Primer paso: recolectar nodos
+    node_locations = {}
+    
+    class NodeCollector(osmium.SimpleHandler):
+        def node(self, n):
+            node_locations[n.id] = (n.location.lon, n.location.lat)
+    
+    NodeCollector().apply_file(input_file)
+    logger.debug(f"Se recolectaron {len(node_locations)} nodos")
+    
+    # Segundo paso: crear geometrías de ways
+    way_geometries = {}
+    
+    class WayGeometryBuilder(osmium.SimpleHandler):
+        def way(self, w):
+            coords = []
+            for node_ref in w.nodes:
+                if node_ref.ref in node_locations:
+                    lon, lat = node_locations[node_ref.ref]
+                    coords.append((lon, lat))
+            
+            if len(coords) >= 2:  # LineString necesita al menos 2 puntos
+                try:
+                    way_geometries[w.id] = LineString(coords)
+                except Exception as e:
+                    logger.warning(f"Error creando geometría para way {w.id}: {e}")
+    
+    WayGeometryBuilder().apply_file(input_file)
+    logger.info(f"Se crearon geometrías para {len(way_geometries)} ways")
+    
+    return way_geometries
